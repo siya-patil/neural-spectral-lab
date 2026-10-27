@@ -13,18 +13,20 @@ def target_function(
     x: torch.Tensor,
     frequencies: Sequence[int] = DEFAULT_FREQUENCIES,
 ) -> torch.Tensor:
-    return sum(
-        torch.sin(2.0 * math.pi * frequency * x) / len(frequencies)
-        for frequency in frequencies
-    )
+    scale = 1.0 / len(frequencies)
+    out = torch.zeros_like(x)
+    for frequency in frequencies:
+        out = out + scale * torch.sin(2.0 * math.pi * frequency * x)
+    return out
 
 
 def target_derivative(
     x: torch.Tensor,
     frequencies: Sequence[int] = DEFAULT_FREQUENCIES,
 ) -> torch.Tensor:
-    return sum(
-        (2.0 * math.pi * frequency / len(frequencies))
-        * torch.cos(2.0 * math.pi * frequency * x)
-        for frequency in frequencies
-    )
+    out = torch.zeros_like(x)
+    for frequency in frequencies:
+        out = out + (2.0 * math.pi * frequency / len(frequencies)) * torch.cos(
+            2.0 * math.pi * frequency * x
+        )
+    return out

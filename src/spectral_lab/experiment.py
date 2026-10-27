@@ -19,7 +19,15 @@ from spectral_lab.targets import (
     target_function,
 )
 
-MODEL_NAMES = ("mlp", "fourier", "siren")
+MODEL_NAMES = ("mlp", "fourier", "gaussian", "siren")
+
+# SIREN converges better at a lower LR (per original paper); others use 1e-3.
+_DEFAULT_LRS: dict[str, float] = {
+    "mlp": 1e-3,
+    "fourier": 1e-3,
+    "gaussian": 1e-3,
+    "siren": 1e-4,
+}
 
 
 def set_seed(seed: int) -> None:
@@ -67,6 +75,8 @@ def run_experiment(
     seeds: tuple[int, ...] = (0, 1, 2),
     train_size: int = 256,
     learning_rate: float = 1e-3,
+    siren_lr: float = 1e-4,
+    fourier_frequencies: tuple[int, ...] = DEFAULT_FREQUENCIES,
     checkpoint_every: int = 25,
     width: int = 64,
     depth: int = 3,
@@ -77,12 +87,16 @@ def run_experiment(
             "steps and checkpoint_every must be positive; "
             "train_size must be at least 2"
         )
-    if learning_rate <= 0 or width < 1 or depth < 1:
-        raise ValueError("learning_rate, width, and depth must be positive")
+    if learning_rate <= 0 or siren_lr <= 0 or width < 1 or depth < 1:
+        raise ValueError("learning_rates, width, and depth must be positive")
     if not seeds:
         raise ValueError("at least one seed is required")
+    if not fourier_frequencies:
+        raise ValueError("at least one fourier frequency is required")
     if device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is not available")
+
+    model_lrs = {**_DEFAULT_LRS, "mlp": learning_rate, "fourier": learning_rate, "gaussian": learning_rate, "siren": siren_lr}
 
     output_dir.mkdir(parents=True, exist_ok=True)
     device_obj = torch.device(device)
@@ -98,8 +112,12 @@ def run_experiment(
 
         for model_name in MODEL_NAMES:
             set_seed(seed)
-            model = build_model(model_name, width=width, depth=depth).to(device_obj)
-            optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+            model = build_model(
+                model_name, width=width, depth=depth, fourier_frequencies=fourier_frequencies
+            ).to(device_obj)
+            lr = model_lrs[model_name]
+            optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=steps)
             if device_obj.type == "cuda":
                 torch.cuda.synchronize(device_obj)
             started = time.perf_counter()
@@ -110,6 +128,7 @@ def run_experiment(
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 optimizer.step()
+                scheduler.step()
 
                 if step % checkpoint_every == 0 or step == steps:
                     eval_x = evaluation_x.detach().requires_grad_(True)
@@ -132,13 +151,11 @@ def run_experiment(
             if device_obj.type == "cuda":
                 torch.cuda.synchronize(device_obj)
             elapsed = time.perf_counter() - started
-            final_record = next(
-                row
-                for row in reversed(records)
-                if row["model"] == model_name
-                and row["seed"] == seed
-                and row["step"] == steps
+            print(
+                f"  {model_name:8s}  seed={seed}  lr={lr:.0e}  {elapsed:.1f}s",
+                file=sys.stderr,
             )
+            final_record = records[-1]
             summary.append(
                 {
                     **final_record,
@@ -157,6 +174,8 @@ def run_experiment(
         seeds=seeds,
         train_size=train_size,
         learning_rate=learning_rate,
+        siren_lr=siren_lr,
+        fourier_frequencies=fourier_frequencies,
         checkpoint_every=checkpoint_every,
         width=width,
         depth=depth,
@@ -174,6 +193,8 @@ def _write_results(
     seeds: tuple[int, ...],
     train_size: int,
     learning_rate: float,
+    siren_lr: float,
+    fourier_frequencies: tuple[int, ...],
     checkpoint_every: int,
     width: int,
     depth: int,
@@ -254,6 +275,8 @@ def _write_results(
                 "seeds": seeds,
                 "train_size": train_size,
                 "learning_rate": learning_rate,
+                "siren_lr": siren_lr,
+                "fourier_frequencies": fourier_frequencies,
                 "checkpoint_every": checkpoint_every,
                 "width": width,
                 "depth": depth,

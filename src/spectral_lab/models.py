@@ -5,6 +5,8 @@ import math
 import torch
 from torch import nn
 
+_DEFAULT_FOURIER_FREQUENCIES = (1, 3, 7, 13)
+
 
 class MLP(nn.Module):
     def __init__(self, width: int = 64, depth: int = 3) -> None:
@@ -21,10 +23,43 @@ class MLP(nn.Module):
 
 class FourierFeatureMLP(nn.Module):
     def __init__(
-        self, width: int = 64, depth: int = 3, bands: int = 6
+        self,
+        width: int = 64,
+        depth: int = 3,
+        frequencies: tuple[int, ...] = _DEFAULT_FOURIER_FREQUENCIES,
     ) -> None:
         super().__init__()
-        frequencies = 2.0 ** torch.arange(bands, dtype=torch.float32)
+        freq_tensor = torch.tensor(frequencies, dtype=torch.float32)
+        self.register_buffer("frequencies", freq_tensor)
+        input_width = 2 * len(frequencies)
+        layers: list[nn.Module] = [nn.Linear(input_width, width), nn.ReLU()]
+        for _ in range(depth - 1):
+            layers.extend((nn.Linear(width, width), nn.ReLU()))
+        layers.append(nn.Linear(width, 1))
+        self.network = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        angles = 2.0 * math.pi * x * self.frequencies
+        features = torch.cat((torch.sin(angles), torch.cos(angles)), dim=-1)
+        return self.network(features)
+
+
+class GaussianFourierMLP(nn.Module):
+    """Fourier feature MLP with randomly sampled frequencies (Tancik et al. 2020).
+
+    Models the practical case where target frequencies are unknown — frequencies
+    are drawn from N(0, sigma^2) once at init and fixed during training.
+    """
+
+    def __init__(
+        self,
+        width: int = 64,
+        depth: int = 3,
+        bands: int = 16,
+        sigma: float = 10.0,
+    ) -> None:
+        super().__init__()
+        frequencies = torch.randn(bands) * sigma
         self.register_buffer("frequencies", frequencies)
         input_width = 2 * bands
         layers: list[nn.Module] = [nn.Linear(input_width, width), nn.ReLU()]
@@ -85,10 +120,16 @@ class SIREN(nn.Module):
         return self.output(self.hidden(x))
 
 
-def build_model(name: str, width: int = 64, depth: int = 3) -> nn.Module:
+def build_model(
+    name: str,
+    width: int = 64,
+    depth: int = 3,
+    fourier_frequencies: tuple[int, ...] = _DEFAULT_FOURIER_FREQUENCIES,
+) -> nn.Module:
     models = {
         "mlp": lambda: MLP(width=width, depth=depth),
-        "fourier": lambda: FourierFeatureMLP(width=width, depth=depth),
+        "fourier": lambda: FourierFeatureMLP(width=width, depth=depth, frequencies=fourier_frequencies),
+        "gaussian": lambda: GaussianFourierMLP(width=width, depth=depth),
         "siren": lambda: SIREN(width=width, depth=depth),
     }
     try:

@@ -27,7 +27,7 @@ def test_frequency_error_is_zero_for_identical_signal() -> None:
 
 def test_models_return_one_value_per_input() -> None:
     x = torch.rand(12, 1)
-    for name in ("mlp", "fourier", "siren"):
+    for name in ("mlp", "fourier", "gaussian", "siren"):
         assert build_model(name)(x).shape == (12, 1)
 
 
@@ -42,7 +42,7 @@ def test_small_experiment_writes_reproducible_outputs(tmp_path) -> None:
         depth=1,
     )
 
-    assert len(records) == 6
+    assert len(records) == 8  # 4 models × 2 steps × 1 seed
     assert (tmp_path / "learning_curves.csv").is_file()
     assert (tmp_path / "summary.json").is_file()
     assert (tmp_path / "aggregate.json").is_file()
@@ -53,6 +53,6 @@ def test_small_experiment_writes_reproducible_outputs(tmp_path) -> None:
     aggregate = json.loads(
         (tmp_path / "aggregate.json").read_text(encoding="utf-8")
     )
-    assert len(aggregate) == 3
+    assert len(aggregate) == 4
     assert aggregate[0]["seed_count"] == 1
     assert aggregate[0]["metrics"]["mse"]["std"] is None
